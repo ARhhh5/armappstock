@@ -1,10 +1,15 @@
 import streamlit as st
 from google import genai
+import datetime
 
 # ==========================================
 # 1. การตั้งค่าหน้าตาเว็บ (UI Setup)
 # ==========================================
 st.set_page_config(page_title="โอเลี้ยง - Lazy Investor", page_icon="🥤", layout="wide")
+
+# ระบบความจำ (Session State) สำหรับเก็บประวัติการค้นหา
+if 'history' not in st.session_state:
+    st.session_state.history = []
 
 st.title("🥤 โอเลี้ยง — Lazy Long-term Holder Edition")
 st.markdown("""
@@ -20,11 +25,12 @@ col1, col2, col3 = st.columns([1, 1, 1])
 
 with col1:
     st.subheader("🔑 1. ตั้งค่าระบบ")
-    api_key = st.text_input("ใส่ Gemini API Key", type="password", help="ใส่ API Key ของคุณที่นี่")
+    # ฝัง API Key ให้เป็นค่าเริ่มต้น (ไม่ต้องพิมพ์ใหม่ทุกครั้ง)
+    api_key = st.text_input("Gemini API Key", type="password", value="AIzaSyDXhee0topZSgPv0U_S0UCFgTfPfnpnUvw")
     
 with col2:
     st.subheader("💰 2. งบประมาณ (บังคับ)")
-    budget = st.number_input("ใส่งบลงทุน (เช่น 5000)", min_value=1)
+    budget = st.number_input("ใส่งบลงทุน (เช่น 5000)", min_value=1.0, value=5000.0, step=100.0)
     currency = st.selectbox("สกุลเงิน", ["USD", "THB"])
 
 with col3:
@@ -62,10 +68,16 @@ oliang_prompt = """
 Bull (+100% to +300%), Base (+30% to +80%), Bear (-30% to -60%)
 ### STEP 9 — Lazy Verdict (คำตัดสินชัดเจน)
 สรุปคำตัดสิน: 🟢 เข้าได้เลย, 🔵 รอ Pullback, 🟡 ถือต่อ, ⚠️ เริ่มระวัง, 🔴 ขายหนี
-### STEP 10 — One-Page Summary (ภาษาคนธรรมดา)
-สรุปสั้นๆ เข้าใจง่าย 1 หน้าจบ พร้อมระบุราคาหุ้นปัจจุบัน และคำนวณจำนวนหุ้นเต็มที่สามารถซื้อได้ด้วยงบประมาณที่ระบุอย่างชัดเจน
+### STEP 10 — สรุปงบประมาณและจำนวนหุ้นที่ซื้อได้ (บังคับรูปแบบเป๊ะๆ)
+คุณต้องค้นหาราคาหุ้นล่าสุดแบบ Real-time และคำนวณตามโครงสร้างด้านล่างนี้เป๊ะๆ (ห้ามมโนตัวเลข ต้องหารให้ถูกต้อง):
 
-**กฎเหล็ก:** ห้ามกุข้อมูล ต้องค้นหาความจริงผ่านอินเทอร์เน็ตเสมอ, ต้องบอก Stage ทุกครั้ง, และถ้า CANSLIM ไม่ผ่านให้หยุดวิเคราะห์ลึก
+**สรุปงบประมาณและจำนวนหุ้นที่ซื้อได้:**
+* งบประมาณที่ให้มา: [ใส่งบประมาณ] [สกุลเงิน]
+* ราคาหุ้น [ชื่อหุ้นย่อ] ปัจจุบันอยู่ที่ประมาณ [ราคาล่าสุด] [สกุลเงิน] ต่อหุ้น
+
+ด้วยงบประมาณ [ใส่งบประมาณ] [สกุลเงิน] คุณจะสามารถซื้อหุ้น [ชื่อหุ้นย่อ] ได้ประมาณ [ใส่จำนวนหุ้นเต็มที่ปัดเศษลง] หุ้นเต็ม ครับ ([ใส่งบประมาณ] / [ราคาล่าสุด] = [ผลหาร] หุ้น)
+
+**กฎเหล็ก:** ห้ามกุข้อมูล ต้องค้นหาความจริงผ่านอินเทอร์เน็ตเสมอ, ต้องบอก Stage ทุกครั้ง, และคำนวณคณิตศาสตร์ใน STEP 10 ให้ถูกต้อง 100%
 """
 
 # ==========================================
@@ -79,22 +91,46 @@ if st.button("🔍 สั่งโอเลี้ยงวิเคราะห�
     else:
         if stock_name:
             user_instruction = f"วิเคราะห์หุ้น '{stock_name}' ภายใต้งบประมาณ {budget} {currency}"
+            search_target = stock_name
         else:
             user_instruction = f"ช่วยหาหุ้น Growth 1 ตัวที่ราคาต่ำกว่า {budget} {currency} และทำการวิเคราะห์ตามระบบให้หน่อย"
+            search_target = f"หาหุ้นงบต่ำกว่า {budget} {currency}"
 
         try:
-            with st.spinner("🥤 โอเลี้ยงกำลังวิเคราะห์ข้อมูล (ใช้เวลาสักครู่)..."):
+            with st.spinner(f"🥤 โอเลี้ยงกำลังวิเคราะห์ข้อมูล (ใช้เวลาสักครู่)..."):
                 client = genai.Client(api_key=api_key)
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=f"{oliang_prompt}\n\nคำสั่งจากผู้ใช้: {user_instruction}",
+                    contents=f"{oliang_prompt}\n\nคำสั่งจากผู้ใช้: {user_instruction}\n(ข้อมูลประกอบ: งบ={budget}, สกุลเงิน={currency})",
                     config={"tools": [{"google_search": {}}]}
                 )
                 
+                # แสดงผลการวิเคราะห์
                 st.success("✅ วิเคราะห์เสร็จสิ้น!")
                 with st.container(border=True):
                     st.markdown(response.text)
+                
+                # เซฟข้อมูลลงประวัติ (History)
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                st.session_state.history.insert(0, {
+                    "time": timestamp,
+                    "target": search_target,
+                    "budget": f"{budget:,.2f} {currency}",
+                    "result": response.text
+                })
                     
         except Exception as e:
             st.error(f"❌ เกิดข้อผิดพลาด: {e}")
-            st.info("ตรวจสอบ API Key หรือลองกดวิเคราะห์ใหม่อีกครั้งครับ")
+            st.info("ตรวจสอบ API Key หรือรอสักครู่แล้วลองกดวิเคราะห์ใหม่อีกครั้งครับ")
+
+# ==========================================
+# 5. ระบบประวัติการค้นหา (Search History)
+# ==========================================
+if st.session_state.history:
+    st.divider()
+    st.subheader("📚 ประวัติการวิเคราะห์ของคุณ (Search History)")
+    st.markdown("ประวัติจะถูกบันทึกไว้ตลอดการใช้งานในหน้านี้ (หากกดรีเฟรชเบราว์เซอร์ใหม่ประวัติจะหายไป)")
+    
+    for idx, item in enumerate(st.session_state.history):
+        with st.expander(f"🕒 {item['time']} | หุ้น/เป้าหมาย: {item['target']} | งบ: {item['budget']}"):
+            st.markdown(item['result'])
